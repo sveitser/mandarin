@@ -1,4 +1,9 @@
 #!/usr/bin/env python
+"""Add example sentences to anki deck.
+
+TODO:
+    [X] Dedupe examples (appear if a chracter appears more than once in a sentence)
+"""
 import itertools
 import json
 import re
@@ -12,13 +17,14 @@ from joblib import Parallel, delayed
 
 import ankipandas
 
+from color import colorize_word
+
 PUNCT = r"([！？｡。\.,…，；])"
 MAX_RANK = 1_000_000
 
 tokenizer = pkuseg.pkuseg()
 with open("ranks.json") as f:
     ranks = json.load(f)
-# TODO: should add to existing examples, not overwrite
 
 
 def geometric_mean(ranks):
@@ -47,58 +53,46 @@ def read_lines(input):
     no_short = [line for line in lines_with_punct if line]
 
     # clean up punctuation
-    lines = []
+    lines = set()
     for first, second in zip(no_short[::-1], no_short[1::]):
         if first not in PUNCT and second in PUNCT:
-            lines.append(f"{first}{second}")
+            lines.add(f"{first}{second}")
 
-    print(f"Number of selected lines {len(lines)}.")
+    print(f"Number of deduped lines {len(lines)}.")
 
-    # dedupe
-    seen = set()
-    selected = []
-    for line in lines:
-        if line not in seen:
-            seen.add(line)
-            selected.append(line)
-
-    print(f"Number of deduped lines {len(selected)}.")
-
-    return selected
+    return lines
 
 
 def group_by_char(lines):
-    by_char = defaultdict(list)
-    for _, line in enumerate(lines):
+    by_char = defaultdict(set)
+    for line in lines:
         for char in line:
-            by_char[char].append(line)
+            by_char[char].add(line)
 
     n_chars = len([v for v in by_char.values() if v])
-    n_examples = sum([len(v) for v in by_char.values()])
     print(f"Number of chars with examples {n_chars}")
+
+    n_examples = sum([len(v) for v in by_char.values()])
     print(f"Total number of examples {n_examples}")
     return by_char
 
 
 def sort_char_example(char, examples):
     tokenized_examples = [tokenize(example) for example in examples]
-    return char, sorted(tokenized_examples, key=difficulty)
+    # presort to (hopefully) make ties deterministic
+    return char, sorted(sorted(tokenized_examples), key=difficulty)
 
 
 def sort_examples(by_char):
-    sorted_examples = {}
-    # for char, examples in tqdm(by_char.items(), "sorting"):
-    #     tokenized_examples = [tokenize(example) for example in examples]
-    #     sorted_examples[char] = sorted(tokenized_examples, key=difficulty)
     sorted_examples = Parallel(n_jobs=-1, verbose=2, backend="multiprocessing")(
         delayed(sort_char_example)(char, examples) for char, examples in by_char.items()
     )
     return dict(sorted_examples)
 
 
-def render(char, examples):
+def to_html(char, examples):
     examples_with_bold_word = [
-        "".join(f" <b>{word}</b> " if char in word else word for word in example)
+        "".join(colorize_word(word) if char in word else word for word in example)
         for example in examples
     ]
     return "<br>".join(examples_with_bold_word)
@@ -116,7 +110,7 @@ def save_anki(by_char):
     han.fields_as_columns(inplace=True)
 
     chars = list(han.nfld_Hanzi)
-    examples = [render(char, extract(by_char, char)) for char in chars]
+    examples = [to_html(char, extract(by_char, char)) for char in chars]
     print()
     print("\n".join(examples[:10]))
     print()
